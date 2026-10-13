@@ -6,9 +6,11 @@ import { createClient } from '@libsql/client';
 import { db } from "./client";
 import { initializeDatabase } from "./seed";
 
-export type UserRole = "USER" | "ADMIN";
-export type Category = { id:string; slug:string; name:string; subtitle:string; description:string; image:string; sort:number; status:"published"|"draft" };
-export type Product = { id:string; slug:string; name:string; shortDescription:string; description:string; sku:string; brand:string; images:string[]; specifications:Record<string,string>; price:number; previousPrice:number|null; image:string; sourceUrl?:string; categoryId:string; featured:number; rating:number; stock:number; isPublished:number; createdAt:string; categoryName?:string; categorySlug?:string };
+export type UserRole = "USER" | "ADMIN" | "DEALER" | "DISTRIBUTOR";
+export type Category = { id:string; slug:string; name:string; subtitle:string; description:string; image:string; sort:number; status:"published"|"draft"; parentId:string|null };
+export type ItemType = "product" | "service";
+export const SERVICE_VIRTUAL_STOCK = 9999; // услуги не имеют остатка: витрина считает их всегда доступными
+export type Product = { id:string; slug:string; name:string; shortDescription:string; description:string; sku:string; brand:string; images:string[]; specifications:Record<string,string>; price:number; previousPrice:number|null; image:string; sourceUrl?:string; categoryId:string; featured:number; rating:number; stock:number; isPublished:number; type:ItemType; createdAt:string; categoryName?:string; categorySlug?:string };
 export type User = { id:string; firstName:string; lastName:string; email:string; phone:string; passwordHash:string; role:UserRole; avatar:string|null; emailVerified:number; isBlocked:number; createdAt:string };
 export type ActivityLog = { id:string; actorId:string|null; action:string; message:string; createdAt:string };
 export const contactMessageStatuses=["NEW","READ","ANSWERED"] as const;
@@ -41,22 +43,86 @@ export async function ensureSeedAdmin(){await ready()}
 export async function getCategories():Promise<Category[]>{await ready();const r=await db.execute(`SELECT * FROM categories WHERE status='published' ORDER BY sort ASC,name ASC`);return r.rows as unknown as Category[]}
 export async function getAdminCategories():Promise<Category[]>{await ready();const r=await db.execute(`SELECT * FROM categories ORDER BY sort ASC,name ASC`);return r.rows as unknown as Category[]}
 export async function getCategoryBySlug(slug:string){await ready();const r=await db.execute({sql:`SELECT * FROM categories WHERE slug=? LIMIT 1`,args:[slug]});return r.rows[0]?row<Category>(r.rows[0]):undefined}
-export async function createCategory(p:{name:string;slug:string;subtitle?:string;description?:string;image?:string;sort?:number;status?:"published"|"draft"}){await ready();const id=randomUUID();await db.execute({sql:`INSERT INTO categories(id,slug,name,subtitle,description,image,sort,status) VALUES(?,?,?,?,?,?,?,?)`,args:[id,p.slug,p.name,p.subtitle||"",p.description||"",p.image||"",p.sort??0,p.status||"published"]});return getCategoryBySlug(p.slug)}
-export async function updateCategoryById(id:string,p:Partial<Category>){await ready();const allowed=["slug","name","subtitle","description","image","sort","status"] as const;const sets:string[]=[];const args:(string|number)[]=[];for(const k of allowed)if(p[k]!==undefined){sets.push(`${k}=?`);args.push(p[k] as never)}if(!sets.length)return getCategoryById(id);args.push(id);await db.execute({sql:`UPDATE categories SET ${sets.join(",")} WHERE id=?`,args});return getCategoryById(id)}
+export async function createCategory(p:{name:string;slug:string;subtitle?:string;description?:string;image?:string;sort?:number;status?:"published"|"draft";parentId?:string|null}){
+  await ready();
+  const parentId=p.parentId||null;
+  await assertValidParent(null,parentId);
+  const id=randomUUID();
+  await db.execute({sql:`INSERT INTO categories(id,slug,name,subtitle,description,image,sort,status,parentId) VALUES(?,?,?,?,?,?,?,?,?)`,args:[id,p.slug,p.name,p.subtitle||"",p.description||"",p.image||"",p.sort??0,p.status||"published",parentId]});
+  return getCategoryBySlug(p.slug);
+}
+/** Допускается ровно два уровня: главная категория → подкатегория. */
+async function assertValidParent(id:string|null,parentId:string|null|undefined){
+  if(!parentId)return;
+  if(parentId===id)throw new StoreError("Категория не может быть вложена сама в себя.",400);
+  const parent=await getCategoryById(parentId);
+  if(!parent)throw new StoreError("Родительская категория не найдена.",404);
+  if(parent.parentId)throw new StoreError("Допускается только два уровня: подкатегорию нельзя сделать родительской.",400);
+  if(id){
+    const kids=await db.execute({sql:`SELECT COUNT(*) AS c FROM categories WHERE parentId=?`,args:[id]});
+    if(Number(kids.rows[0]?.c||0))throw new StoreError("У этой категории есть подкатегории — её нельзя вложить в другую.",409);
+  }
+}
+export async function updateCategoryById(id:string,p:Partial<Category>){
+  await ready();
+  if(p.parentId!==undefined)await assertValidParent(id,p.parentId||null);
+  const allowed=["slug","name","subtitle","description","image","sort","status","parentId"] as const;
+  const sets:string[]=[];const args:(string|number|null)[]=[];
+  for(const k of allowed)if(p[k]!==undefined){sets.push(`${k}=?`);args.push(k==="parentId"?(p.parentId||null):(p[k] as never))}
+  if(!sets.length)return getCategoryById(id);
+  args.push(id);
+  await db.execute({sql:`UPDATE categories SET ${sets.join(",")} WHERE id=?`,args});
+  return getCategoryById(id);
+}
 async function getCategoryById(id:string){const r=await db.execute({sql:`SELECT * FROM categories WHERE id=?`,args:[id]});return r.rows[0]?row<Category>(r.rows[0]):undefined}
-export async function deleteCategoryById(id:string){await ready();const r=await db.execute({sql:`SELECT COUNT(*) AS count FROM products WHERE categoryId=?`,args:[id]});if(Number(r.rows[0]?.count||0))throw new StoreError("Нельзя удалить категорию с товарами.",409);await db.execute({sql:`DELETE FROM categories WHERE id=?`,args:[id]})}
+export async function deleteCategoryById(id:string){
+  await ready();
+  const kids=await db.execute({sql:`SELECT COUNT(*) AS count FROM categories WHERE parentId=?`,args:[id]});
+  if(Number(kids.rows[0]?.count||0))throw new StoreError("Нельзя удалить категорию с подкатегориями. Сначала удалите или перенесите их.",409);
+  const r=await db.execute({sql:`SELECT COUNT(*) AS count FROM products WHERE categoryId=?`,args:[id]});
+  if(Number(r.rows[0]?.count||0))throw new StoreError("Нельзя удалить категорию с товарами.",409);
+  await db.execute({sql:`DELETE FROM categories WHERE id=?`,args:[id]});
+}
 
-export type ProductQuery={categorySlug?:string;categoryId?:string;search?:string;featured?:boolean;brand?:string;minPrice?:number;maxPrice?:number;inStock?:boolean;sort?:"price-asc"|"price-desc"|"name"|"newest";limit?:number;ids?:string[]};
-function mapProduct(x:Record<string,unknown>):Product{return {...x,images:parseJson<string[]>(x.images,[]),specifications:parseJson<Record<string,string>>(x.specifications,{}),price:Number(x.price),previousPrice:x.previousPrice==null?null:Number(x.previousPrice),featured:Number(x.featured||0),rating:Number(x.rating||0),stock:Number(x.stock||0),isPublished:Number(x.isPublished??1)} as Product}
-export async function getProducts(q:ProductQuery={}){await ready();const w:string[]=["p.isPublished=1"];const a:(string|number)[]=[];if(q.categorySlug){w.push("c.slug=?");a.push(q.categorySlug)}if(q.categoryId){w.push("p.categoryId=?");a.push(q.categoryId)}if(q.search){w.push("(p.name LIKE ? OR p.description LIKE ? OR p.sku LIKE ? OR p.brand LIKE ?)");const s=`%${q.search}%`;a.push(s,s,s,s)}if(q.featured)w.push("p.featured=1");if(q.brand){w.push("p.brand=?");a.push(q.brand)}if(q.minPrice!==undefined){w.push("p.price>=?");a.push(q.minPrice)}if(q.maxPrice!==undefined){w.push("p.price<=?");a.push(q.maxPrice)}if(q.inStock)w.push("p.stock>0");if(q.ids?.length){w.push(`p.id IN (${q.ids.map(()=>"?").join(",")})`);a.push(...q.ids)}const order=q.sort==="price-asc"?"p.price ASC":q.sort==="price-desc"?"p.price DESC":q.sort==="name"?"p.name ASC":"datetime(p.createdAt) DESC";const limit=Math.min(100,Math.max(1,q.limit??100));const r=await db.execute({sql:`SELECT p.*,c.name AS categoryName,c.slug AS categorySlug FROM products p JOIN categories c ON c.id=p.categoryId WHERE ${w.join(" AND ")} ORDER BY ${order} LIMIT ?`,args:[...a,limit]});return r.rows.map(x=>mapProduct(row<Record<string,unknown>>(x)))}
+export type CategoryNode=Category&{children:Category[];productCount:number};
+/** Дерево для витрины: опубликованные главные категории с подкатегориями и числом товаров. */
+export async function getCategoryTree():Promise<CategoryNode[]>{
+  const all=await getCategories();
+  const counts=await db.execute(`SELECT categoryId,COUNT(*) AS c FROM products WHERE isPublished=1 GROUP BY categoryId`);
+  const own=new Map(counts.rows.map(r=>[String(r.categoryId),Number(r.c)]));
+  const mains=all.filter(c=>!c.parentId);
+  return mains.map(m=>{
+    const children=all.filter(c=>c.parentId===m.id);
+    const productCount=(own.get(m.id)||0)+children.reduce((s,c)=>s+(own.get(c.id)||0),0);
+    return {...m,children,productCount};
+  });
+}
+/** Цепочка для хлебных крошек: [главная] или [главная, подкатегория]. */
+export async function getCategoryPath(slug:string):Promise<Category[]>{
+  const cat=await getCategoryBySlug(slug);
+  if(!cat)return [];
+  const parent=cat.parentId?await getCategoryById(cat.parentId):undefined;
+  return parent?[parent,cat]:[cat];
+}
+
+export type ProductQuery={categorySlug?:string;categoryId?:string;search?:string;featured?:boolean;brand?:string;minPrice?:number;maxPrice?:number;inStock?:boolean;sort?:"price-asc"|"price-desc"|"name"|"newest";limit?:number;ids?:string[];type?:ItemType};
+function mapProduct(x:Record<string,unknown>):Product{return {...x,images:parseJson<string[]>(x.images,[]),specifications:parseJson<Record<string,string>>(x.specifications,{}),price:Number(x.price),previousPrice:x.previousPrice==null?null:Number(x.previousPrice),featured:Number(x.featured||0),rating:Number(x.rating||0),stock:Number(x.stock||0),isPublished:Number(x.isPublished??1),type:x.type==="service"?"service":"product"} as Product}
+export async function getProducts(q:ProductQuery={}){await ready();const w:string[]=["p.isPublished=1"];const a:(string|number)[]=[];if(q.categorySlug){w.push("(c.slug=? OR c.parentId=(SELECT id FROM categories WHERE slug=?))");a.push(q.categorySlug,q.categorySlug)}if(q.type){w.push("p.type=?");a.push(q.type)}if(q.categoryId){w.push("p.categoryId=?");a.push(q.categoryId)}if(q.search){w.push("(p.name LIKE ? OR p.description LIKE ? OR p.sku LIKE ? OR p.brand LIKE ?)");const s=`%${q.search}%`;a.push(s,s,s,s)}if(q.featured)w.push("p.featured=1");if(q.brand){w.push("p.brand=?");a.push(q.brand)}if(q.minPrice!==undefined){w.push("p.price>=?");a.push(q.minPrice)}if(q.maxPrice!==undefined){w.push("p.price<=?");a.push(q.maxPrice)}if(q.inStock)w.push("p.stock>0");if(q.ids?.length){w.push(`p.id IN (${q.ids.map(()=>"?").join(",")})`);a.push(...q.ids)}const order=q.sort==="price-asc"?"p.price ASC":q.sort==="price-desc"?"p.price DESC":q.sort==="name"?"p.name ASC":"datetime(p.createdAt) DESC";const limit=Math.min(100,Math.max(1,q.limit??100));const r=await db.execute({sql:`SELECT p.*,c.name AS categoryName,c.slug AS categorySlug FROM products p JOIN categories c ON c.id=p.categoryId WHERE ${w.join(" AND ")} ORDER BY ${order} LIMIT ?`,args:[...a,limit]});return r.rows.map(x=>mapProduct(row<Record<string,unknown>>(x)))}
 export async function getProductsSafe(q:ProductQuery={}){return getProducts(q)}
 export async function getCategoriesSafe(){return getCategories()}
 export async function getAllProducts(){return getProducts({limit:100})}
 export async function getProductBySlug(slug:string){await ready();const r=await db.execute({sql:`SELECT p.*,c.name AS categoryName,c.slug AS categorySlug FROM products p JOIN categories c ON c.id=p.categoryId WHERE p.slug=? LIMIT 1`,args:[slug]});return r.rows[0]?mapProduct(row<Record<string,unknown>>(r.rows[0])):undefined}
 export async function getProductById(id:string){await ready();const r=await db.execute({sql:`SELECT p.*,c.name AS categoryName,c.slug AS categorySlug FROM products p JOIN categories c ON c.id=p.categoryId WHERE p.id=? LIMIT 1`,args:[id]});return r.rows[0]?mapProduct(row<Record<string,unknown>>(r.rows[0])):undefined}
 export async function getProductBrands(categorySlug?:string){const ps=await getProducts({categorySlug,limit:100});return [...new Set(ps.map(p=>p.brand).filter(Boolean))].sort()}
-export async function createProduct(p:{slug:string;name:string;shortDescription?:string;description?:string;sku?:string;brand?:string;images?:string[];specifications?:Record<string,string>;price:number;previousPrice?:number|null;image?:string;sourceUrl?:string;categoryId:string;featured?:number;rating?:number;stock?:number;isPublished?:number}){await ready();const id=randomUUID();await db.execute({sql:`INSERT INTO products(id,slug,name,shortDescription,description,sku,brand,images,specifications,price,previousPrice,image,sourceUrl,categoryId,featured,rating,stock,isPublished,createdAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,args:[id,p.slug,p.name,p.shortDescription||"",p.description||p.shortDescription||"",p.sku||"",p.brand||"",JSON.stringify(p.images||[]),JSON.stringify(p.specifications||{}),p.price,p.previousPrice??null,p.image||p.images?.[0]||"",p.sourceUrl||"",p.categoryId,p.featured||0,p.rating||0,p.stock||0,p.isPublished===0?0:1,now()]});return getProductById(id)}
-export async function updateProductById(id:string,p:Partial<Product>){await ready();const map:any={slug:p.slug,name:p.name,shortDescription:p.shortDescription,description:p.description,sku:p.sku,brand:p.brand,images:p.images?JSON.stringify(p.images):undefined,specifications:p.specifications?JSON.stringify(p.specifications):undefined,price:p.price,previousPrice:p.previousPrice,image:p.image,sourceUrl:p.sourceUrl,categoryId:p.categoryId,featured:p.featured,rating:p.rating,stock:p.stock,isPublished:p.isPublished};const s:string[]=[];const a:any[]=[];for(const [k,v] of Object.entries(map))if(v!==undefined){s.push(`${k}=?`);a.push(v)}if(s.length){a.push(id);await db.execute({sql:`UPDATE products SET ${s.join(",")} WHERE id=?`,args:a})}return getProductById(id)}
+export async function createProduct(p:{slug:string;name:string;shortDescription?:string;description?:string;sku?:string;brand?:string;images?:string[];specifications?:Record<string,string>;price:number;previousPrice?:number|null;image?:string;sourceUrl?:string;categoryId:string;featured?:number;rating?:number;stock?:number;isPublished?:number;type?:ItemType}){
+  await ready();
+  const id=randomUUID();
+  const type:ItemType=p.type==="service"?"service":"product";
+  const stock=type==="service"?SERVICE_VIRTUAL_STOCK:(p.stock||0);
+  await db.execute({sql:`INSERT INTO products(id,slug,name,shortDescription,description,sku,brand,images,specifications,price,previousPrice,image,sourceUrl,categoryId,featured,rating,stock,isPublished,type,createdAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,args:[id,p.slug,p.name,p.shortDescription||"",p.description||p.shortDescription||"",p.sku||"",p.brand||"",JSON.stringify(p.images||[]),JSON.stringify(p.specifications||{}),p.price,p.previousPrice??null,p.image||p.images?.[0]||"",p.sourceUrl||"",p.categoryId,p.featured||0,p.rating||0,stock,p.isPublished===0?0:1,type,now()]});
+  return getProductById(id);
+}
+export async function updateProductById(id:string,p:Partial<Product>){await ready();const map:any={slug:p.slug,name:p.name,shortDescription:p.shortDescription,description:p.description,sku:p.sku,brand:p.brand,images:p.images?JSON.stringify(p.images):undefined,specifications:p.specifications?JSON.stringify(p.specifications):undefined,price:p.price,previousPrice:p.previousPrice,image:p.image,sourceUrl:p.sourceUrl,categoryId:p.categoryId,featured:p.featured,rating:p.rating,stock:p.type==="service"?SERVICE_VIRTUAL_STOCK:p.stock,isPublished:p.isPublished,type:p.type===undefined?undefined:(p.type==="service"?"service":"product")};const s:string[]=[];const a:any[]=[];for(const [k,v] of Object.entries(map))if(v!==undefined){s.push(`${k}=?`);a.push(v)}if(s.length){a.push(id);await db.execute({sql:`UPDATE products SET ${s.join(",")} WHERE id=?`,args:a})}return getProductById(id)}
 export async function deleteProductById(id:string){await ready();await db.execute({sql:`DELETE FROM products WHERE id=?`,args:[id]})}
 
 export async function getUserByEmail(email:string){await ready();const r=await db.execute({sql:`SELECT * FROM users WHERE lower(email)=? LIMIT 1`,args:[email.trim().toLowerCase()]});return r.rows[0]?row<User>(r.rows[0]):undefined}

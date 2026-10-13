@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { isAppRole, type AppRole } from "@/lib/roles";
 import { FALLBACK_JWT_SECRET, getJwtSecret, hasCustomJwtSecret, isPrimaryAdminEmail } from "@/lib/jwt-secret";
 
 export { FALLBACK_JWT_SECRET };
@@ -9,7 +10,7 @@ export type AuthUser = {
   email: string;
   /** Имя для отображения (П.3: зашиваем в JWT). */
   name?: string;
-  role: "USER" | "ADMIN";
+  role: AppRole;
 };
 
 let fallbackWarned = false;
@@ -47,13 +48,13 @@ export function signToken(user: AuthUser) {
 export function verifyToken(token: string) {
   const payload = jwt.verify(token, currentJwtSecret());
   if (typeof payload === "string" || typeof payload.id !== "string" ||
-      typeof payload.email !== "string" || (payload.role !== "USER" && payload.role !== "ADMIN")) {
+      typeof payload.email !== "string" || !isAppRole(payload.role)) {
     throw new Error("Invalid authentication token.");
   }
   // П.2: главный админ — всегда ADMIN, даже если в токене/БД роль другая.
   // П.3: name опционален (старые токены без него остаются валидны).
   const email = payload.email as string;
-  const role = isPrimaryAdminEmail(email) ? "ADMIN" : (payload.role as "USER" | "ADMIN");
+  const role = isPrimaryAdminEmail(email) ? "ADMIN" : (payload.role as AppRole);
   const name = typeof (payload as { name?: unknown }).name === "string"
     ? ((payload as { name?: string }).name as string)
     : "";

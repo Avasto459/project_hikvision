@@ -26,7 +26,9 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
   const [added, setAdded] = useState(false);
   const [adding, setAdding] = useState(false);
   const sources = [...new Set([product.image, ...(product.images || [])].filter(Boolean).map(productImageSrc).filter(Boolean))];
-  const badge = stockBadge(product.stock);
+  const badge = product.type === "service"
+    ? { text: "Услуга", className: "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/30" }
+    : stockBadge(product.stock);
   const discount = product.previousPrice && product.previousPrice > product.price
     ? Math.round(((product.previousPrice - product.price) / product.previousPrice) * 100)
     : 0;

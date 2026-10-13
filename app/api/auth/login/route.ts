@@ -11,18 +11,19 @@ import {
   isReadOnlyMode,
   saveMemoryUser,
   verifyFallbackAdmin,
+  type UserRole,
 } from "@/lib/db";
 import { normalizeTajikPhone } from "@/lib/phone";
 import { SESSION_COOKIE_NAME, sessionCookieOptions } from "@/lib/session";
 
 /** П.3: собрать JWT с id, email, name, role. */
-function issueSessionToken(user: { id: string; email: string; firstName: string; lastName: string; role: "USER" | "ADMIN" }) {
+function issueSessionToken(user: { id: string; email: string; firstName: string; lastName: string; role: UserRole }) {
   const publicUser = getPublicUser(user as Parameters<typeof getPublicUser>[0]);
   return signToken({
     id: publicUser.id,
     email: publicUser.email,
     name: publicUser.name || getUserDisplayName(user),
-    role: publicUser.role as "USER" | "ADMIN",
+    role: publicUser.role as UserRole,
   });
 }
 

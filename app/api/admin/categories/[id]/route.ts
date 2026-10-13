@@ -18,6 +18,9 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     if (body.status !== undefined && body.status !== "published" && body.status !== "draft") {
       throw new StoreError("Недопустимый статус категории.", 400);
     }
+    if (body.parentId !== undefined && body.parentId !== null && typeof body.parentId !== "string") {
+      throw new StoreError("Некорректная родительская категория.", 400);
+    }
     const category = await updateCategoryById(id, body);
     if (!category) throw new StoreError("Категория не найдена.", 404);
     return NextResponse.json({ category });

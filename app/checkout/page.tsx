@@ -10,7 +10,7 @@ const inputClass = "w-full rounded-xl border border-slate-200 bg-white px-4 py-3
 
 export default function CheckoutPage() {
   const { items, total, ready, clearCart } = useCart();
-  const [form, setForm] = useState({ firstName: "", lastName: "", phone: "", email: "", address: "", city: "", comment: "" });
+  const [form, setForm] = useState({ name: "", phone: "", addressComment: "" });
   const [error, setError] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -20,7 +20,7 @@ export default function CheckoutPage() {
     setError("");
     setSubmitting(true);
     try {
-      const token = localStorage.getItem("hasi-token");
+      const token = localStorage.getItem("hasi-token"); // нужен только чтобы очистить корзину старого аккаунта
       const response = await fetch("/api/orders", {
         method: "POST",
         headers: {
@@ -49,7 +49,7 @@ export default function CheckoutPage() {
         {orderNumber ? (
           <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-8 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200">
             <h1 className="text-3xl font-black">Заказ успешно оформлен!</h1>
-            <p className="mt-3">Номер заказа: <strong>{orderNumber}</strong>. Мы свяжемся с вами для подтверждения.</p>
+            <p className="mt-3">Номер заказа: <strong>{orderNumber}</strong>. Ваша заявка передана дилерам — первый принявший свяжется с вами по телефону. Оплата дилеру наличными или переводом.</p>
             <Link href="/catalog" className="mt-6 inline-flex rounded-full bg-violet-700 px-5 py-3 text-sm font-semibold text-white">Продолжить покупки</Link>
           </div>
         ) : (
@@ -65,15 +65,12 @@ export default function CheckoutPage() {
             {ready && items.length > 0 ? (
               <form onSubmit={submit} className="mt-8 grid gap-8 lg:grid-cols-[1fr_360px]">
                 <div className="rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-                  <h2 className="text-xl font-bold">Данные для доставки</h2>
-                  <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                    <label className="text-sm font-medium">Имя<input required maxLength={200} autoComplete="given-name" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} className={`${inputClass} mt-2`} /></label>
-                    <label className="text-sm font-medium">Фамилия<input required maxLength={200} autoComplete="family-name" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} className={`${inputClass} mt-2`} /></label>
-                    <label className="text-sm font-medium sm:col-span-2">Телефон<input required type="tel" maxLength={200} autoComplete="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className={`${inputClass} mt-2`} /></label>
-                    <label className="text-sm font-medium sm:col-span-2">Email<input required type="email" maxLength={254} autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={`${inputClass} mt-2`} /></label>
-                    <label className="text-sm font-medium sm:col-span-2">Адрес<input required maxLength={200} autoComplete="street-address" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} className={`${inputClass} mt-2`} /></label>
-                    <label className="text-sm font-medium sm:col-span-2">Город<input required maxLength={200} autoComplete="address-level2" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} className={`${inputClass} mt-2`} /></label>
-                    <label className="text-sm font-medium sm:col-span-2">Комментарий<textarea maxLength={1000} rows={4} value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className={`${inputClass} mt-2`} /></label>
+                  <h2 className="text-xl font-bold">Ваши данные</h2>
+                  <p className="mt-1 text-sm text-slate-500">Регистрация не нужна — достаточно имени, телефона и адреса.</p>
+                  <div className="mt-5 grid gap-4">
+                    <label className="text-sm font-medium">Имя<input required minLength={2} maxLength={120} autoComplete="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`${inputClass} mt-2`} /></label>
+                    <label className="text-sm font-medium">Телефон<input required type="tel" maxLength={20} autoComplete="tel" placeholder="+992XXXXXXXXX" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className={`${inputClass} mt-2`} /></label>
+                    <label className="text-sm font-medium">Адрес / комментарий<textarea required minLength={3} maxLength={1000} rows={4} placeholder="Город, улица, дом, ориентир, удобное время" value={form.addressComment} onChange={(e) => setForm({ ...form, addressComment: e.target.value })} className={`${inputClass} mt-2`} /></label>
                   </div>
                   {error ? <p role="alert" className="mt-4 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
                   <button type="submit" disabled={submitting || !items.length} className="mt-6 w-full rounded-full bg-violet-700 px-5 py-3 font-semibold text-white hover:bg-violet-600 disabled:opacity-50">

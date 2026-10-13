@@ -6,7 +6,8 @@ import { ProductPurchase } from "@/components/product-purchase";
 import { ProductGallery } from "@/components/product-gallery";
 import { FavoriteButton } from "@/components/favorite-button";
 import { SiteShell } from "@/components/site-shell";
-import { getProductBySlug, getProducts, type Product } from "@/lib/db";
+import { Breadcrumbs, type Crumb } from "@/components/breadcrumbs";
+import { getCategoryPath, getProductBySlug, getProducts, type Product } from "@/lib/db";
 import { formatTjs } from "@/lib/currency";
 
 export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -17,18 +18,19 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
     notFound();
   }
 
+  const path = await getCategoryPath(product.categorySlug ?? "");
+  const crumbs: Crumb[] = [
+    { label: "Главная", href: "/" },
+    { label: "Каталог", href: "/catalog" },
+    ...path.map((item) => ({ label: item.name, href: `/catalog?category=${encodeURIComponent(item.slug)}` })),
+    { label: product.name },
+  ];
   const relatedProducts = (await getProducts({ categorySlug: product.categorySlug, limit: 5 })).filter((item: Product) => item.id !== product.id).slice(0, 4);
 
   return (
     <SiteShell>
       <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-        <div className="mb-8 flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
-          <Link href="/" className="hover:text-violet-600 dark:hover:text-violet-300">Главная</Link>
-          <span>/</span>
-          <Link href={`/category/${product.categorySlug}`} className="hover:text-violet-600 dark:hover:text-violet-300">{product.categoryName}</Link>
-          <span>/</span>
-          <span className="font-medium text-slate-700 dark:text-slate-200">{product.name}</span>
-        </div>
+        <Breadcrumbs items={crumbs} />
 
         <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
           <ProductGallery images={product.images} name={product.name} />
@@ -46,9 +48,13 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
               ) : null}
             </div>
 
-            <p className={product.stock > 0 ? "text-sm font-medium text-emerald-600" : "text-sm font-medium text-rose-600"}>
-              {product.stock > 0 ? `В наличии: ${product.stock} шт.` : "Нет в наличии"}
-            </p>
+            {product.type === "service" ? (
+              <p className="text-sm font-medium text-sky-600">Услуга — оформляется по заявке, дилер свяжется с вами.</p>
+            ) : (
+              <p className={product.stock > 0 ? "text-sm font-medium text-emerald-600" : "text-sm font-medium text-rose-600"}>
+                {product.stock > 0 ? `В наличии: ${product.stock} шт.` : "Нет в наличии"}
+              </p>
+            )}
             <ProductPurchase product={product} />
 
             <div className="grid gap-4 sm:grid-cols-2">

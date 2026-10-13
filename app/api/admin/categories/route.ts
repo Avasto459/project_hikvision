@@ -16,7 +16,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     await requireAdmin(request);
-    const body = (await request.json()) as { name?: string; slug?: string; subtitle?: string; description?: string; image?: string };
+    const body = (await request.json()) as { name?: string; slug?: string; subtitle?: string; description?: string; image?: string; parentId?: string | null; sort?: number };
     if (!body.name?.trim() || !/^[a-z0-9-]+$/.test(body.slug || "")) {
       throw new StoreError("Укажите название и slug из латинских букв, цифр и дефисов.", 400);
     }
@@ -27,6 +27,8 @@ export async function POST(request: Request) {
       subtitle: body.subtitle || "",
       description: body.description || "",
       image: body.image || "",
+      parentId: body.parentId || null, // привязка подкатегории к главной категории
+      sort: Number.isFinite(Number(body.sort)) ? Number(body.sort) : 0,
     });
 
     return NextResponse.json({ category }, { status: 201 });

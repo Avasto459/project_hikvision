@@ -20,8 +20,11 @@ export async function PATCH(request: Request, { params }: RouteContext) {
         (!Number.isSafeInteger(body.previousPrice) || body.previousPrice < 0)) {
       throw new StoreError("Старая цена должна быть целым неотрицательным числом.", 400);
     }
-    if (body.stock !== undefined && (!Number.isInteger(body.stock) || (body.stock as number) < 0)) {
+    if (body.type !== "service" && body.stock !== undefined && (!Number.isInteger(body.stock) || (body.stock as number) < 0)) {
       throw new StoreError("Количество на складе должно быть целым неотрицательным числом.", 400);
+    }
+    if (body.type !== undefined && body.type !== "product" && body.type !== "service") {
+      throw new StoreError("Тип позиции: product (товар) или service (услуга).", 400);
     }
     if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim() || body.name.length > 200)) {
       throw new StoreError("Название товара обязательно и не должно превышать 200 символов.", 400);

@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { getBearerToken } from "@/lib/auth";
-import { createOrder, getUserOrders, StoreError, type CheckoutItem } from "@/lib/db";
+import { StoreError, getUserOrders } from "@/lib/db";
+import { db } from "@/lib/db/client";
+import { createCustomerOrder } from "@/lib/hasi";
 import { normalizeTajikPhone } from "@/lib/phone";
 import { sendNewOrderNotice } from "@/lib/telegram";
 import { requireUser } from "@/lib/api-auth";
 
+/** История заказов для УЖЕ существующих аккаунтов магазина (старый раздел). */
 export async function GET(request: Request) {
   try {
     const user = await requireUser(request);
@@ -16,85 +19,73 @@ export async function GET(request: Request) {
   }
 }
 
+/**
+ * POST /api/orders — заказ покупателя БЕЗ регистрации и входа (ТЗ 0.1).
+ * Принимает: name, phone, addressComment, items[{productId, quantity}].
+ * Заказ получает уникальный номер и попадает в «Свободные заявки» (pending_dealer).
+ */
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as {
-      firstName?: string;
-      lastName?: string;
-      phone?: string;
-      address?: string;
-      city?: string;
-      comment?: string;
-      email?: string;
-      items?: CheckoutItem[];
-    };
-    for (const [label, value] of [
-      ["Имя", body.firstName],
-      ["Фамилия", body.lastName],
-      ["Телефон", body.phone],
-      ["Адрес", body.address],
-      ["Город", body.city],
-    ] as const) {
-      if (!value?.trim()) throw new StoreError(`Поле «${label}» обязательно.`, 400);
-      if (value.length > 200) throw new StoreError(`Поле «${label}» слишком длинное.`, 400);
+    let body: { name?: unknown; phone?: unknown; addressComment?: unknown; items?: unknown };
+    try {
+      body = await request.json() as typeof body;
+    } catch {
+      throw new StoreError("Некорректный запрос.", 400);
     }
-    if ((body.comment || "").length > 1000) throw new StoreError("Комментарий слишком длинный.", 400);
-    const email = body.email?.trim().toLowerCase() || "";
-    const phone = normalizeTajikPhone(body.phone || "");
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new StoreError("Укажите корректный email.", 400);
+    const name = typeof body.name === "string" ? body.name : "";
+    const phoneRaw = typeof body.phone === "string" ? body.phone : "";
+    const addressComment = typeof body.addressComment === "string" ? body.addressComment : "";
+    const phone = normalizeTajikPhone(phoneRaw);
+    if (!name.trim()) throw new StoreError("Укажите имя.", 400);
     if (!phone) throw new StoreError("Укажите телефон в формате +992XXXXXXXXX.", 400);
-    if (!Array.isArray(body.items) || body.items.length > 100) throw new StoreError("Корзина пуста или содержит слишком много товаров.", 400);
+    if (!addressComment.trim()) throw new StoreError("Укажите адрес или комментарий.", 400);
+    if (!Array.isArray(body.items)) throw new StoreError("Корзина пуста.", 400);
 
-    let userId: string | null = null;
-    const token = getBearerToken(request.headers.get("authorization"));
-    if (token) {
-      try {
-        userId = (await requireUser(request)).id;
-      } catch (error) {
-        if (error instanceof StoreError) throw error;
-        throw new StoreError("Сессия недействительна. Войдите снова или оформите заказ без аккаунта.", 401);
-      }
-    }
-    const order = await createOrder({
-      userId,
-      email,
-      firstName: body.firstName!.trim(),
-      lastName: body.lastName!.trim(),
+    const order = await createCustomerOrder({
+      name,
       phone,
-      address: body.address!.trim(),
-      city: body.city!.trim(),
-      comment: body.comment?.trim() || "",
-      items: body.items,
+      addressComment,
+      items: body.items as Array<{ productId: string; quantity: number }>,
     });
-    if (!order) throw new StoreError("Не удалось оформить заказ.", 500);
-    // Уведомление в Telegram — строго после сохранения заказа; его сбой
-    // (бот заблокирован, чат не найден, нет сети) не должен ломать оформление.
+
+    // Если покупатель зашёл в старый аккаунт, очищаем его серверную корзину (best-effort).
+    if (getBearerToken(request.headers.get("authorization"))) {
+      try {
+        const user = await requireUser(request);
+        await db.execute({ sql: "DELETE FROM cartItems WHERE userId=?", args: [user.id] });
+      } catch { /* заказ уже оформлен — сбой очистки корзины не критичен */ }
+    }
+
+    // Уведомление в Telegram — строго после сохранения; его сбой не ломает оформление.
     try {
       await sendNewOrderNotice({
-        orderNumber: order.orderNumber || order.id,
-        firstName: body.firstName!.trim(),
-        lastName: body.lastName!.trim(),
+        orderNumber: order.orderNumber,
+        firstName: name.trim(),
+        lastName: "",
         phone,
-        email,
-        city: body.city!.trim(),
-        address: body.address!.trim(),
-        comment: body.comment?.trim() || "",
+        email: "",
+        city: "",
+        address: addressComment.trim(),
+        comment: "Свободная заявка (ожидает дилера)",
         total: order.total,
-        items: order.items,
+        items: order.items.map((l) => ({ name: l.name, quantity: l.quantity, unitPrice: l.price })),
       });
     } catch (error) {
       console.error("Telegram order notification failed:", error instanceof Error ? error.message : error);
     }
+
     return NextResponse.json({
       success: true,
       orderId: order.id,
       orderNumber: order.orderNumber,
-      message: "Заказ успешно оформлен!",
+      status: order.status,
+      total: order.total,
+      message: "Заказ оформлен! Ближайший дилер свяжется с вами.",
     }, { status: 201 });
   } catch (error) {
     if (error && !(error instanceof StoreError)) console.error("Order creation failed:", error);
     return NextResponse.json(
-      { error: error instanceof StoreError ? error.message : "Не удалось оформить заказ. Повторите попытку или свяжитесь с магазином." },
+      { error: error instanceof StoreError ? error.message : "Не удалось оформить заказ. Повторите попытку." },
       { status: error instanceof StoreError ? error.status : 500 },
     );
   }

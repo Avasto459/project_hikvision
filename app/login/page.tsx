@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { SiteShell } from "@/components/site-shell";
 import { PasswordInput } from "@/components/auth-fields";
+import { dashboardPathForRole } from "@/lib/roles";
 
 function LoginForm() {
   const router = useRouter();
@@ -30,7 +31,7 @@ function LoginForm() {
       localStorage.setItem("hasi-token", result.token);
       window.dispatchEvent(new Event("hasi-auth-changed"));
       // Administrators land in the admin panel, everyone else in the personal account.
-      router.push(result.user?.role === "ADMIN" ? "/admin" : "/account");
+      router.push(dashboardPathForRole(result.user?.role));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не удалось выполнить вход.");
     } finally {

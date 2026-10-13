@@ -4,9 +4,10 @@ import { PasswordInput } from "@/components/auth-fields";
 import { Trash2 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { formatTjs } from "@/lib/currency";
+import { HasiAdminPanel } from "@/components/hasi-admin-panel";
 
-type Category = { id: string; name: string; slug: string; subtitle: string; description: string; image: string; status: string };
-type Product = { id: string; name: string; slug: string; sku: string; brand: string; price: number; previousPrice: number | null; shortDescription: string; description: string; image: string; sourceUrl: string; images: string[]; specifications: Record<string, string>; categoryId: string; stock: number; featured: number; isPublished: number };
+type Category = { id: string; name: string; slug: string; subtitle: string; description: string; image: string; status: string; parentId: string | null };
+type Product = { id: string; name: string; slug: string; sku: string; brand: string; price: number; previousPrice: number | null; shortDescription: string; description: string; image: string; sourceUrl: string; images: string[]; specifications: Record<string, string>; categoryId: string; stock: number; featured: number; isPublished: number; type: "product" | "service" };
 type OrderLine = { id: string; name: string; sku: string; unitPrice: number; quantity: number; lineTotal: number };
 type Order = { id: string; orderNumber: string | null; email: string; firstName: string; lastName: string; phone: string; address: string; city: string; comment: string; total: number; status: string; createdAt: string; items: OrderLine[] };
 type ContactMessage = { id: string; name: string; email: string; phone: string; message: string; status: "NEW" | "READ" | "ANSWERED"; reply: string; replyText: string; isReplied: boolean; repliedAt: string | null; createdAt: string };
@@ -16,7 +17,7 @@ type AdminUser = { id: string; firstName: string; lastName: string; email: strin
 type IntegrationField = { key: string; secret: boolean; isSet: boolean; value: string };
 type Integration = { configured: boolean; missing: string[]; problem?: string | null; fields: IntegrationField[] };
 type Integrations = Record<string, Integration>;
-type Tab = "overview" | "orders" | "catalog" | "users" | "messages" | "settings" | "profile";
+type Tab = "overview" | "orders" | "dealers" | "catalog" | "users" | "messages" | "settings" | "profile";
 type Toast = { type: "ok" | "error"; text: string } | null;
 
 const inputClass = "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white";
@@ -24,8 +25,8 @@ const primaryButton = "rounded-xl bg-violet-700 px-4 py-2.5 text-sm font-bold te
 const ghostButton = "rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:hover:bg-slate-800";
 const dangerButton = "rounded-xl border border-rose-200 px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900 dark:hover:bg-rose-950/40";
 const card = "rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900";
-const emptyCategory = { name: "", slug: "", subtitle: "", description: "", image: "" };
-const emptyProduct = { name: "", slug: "", sku: "", brand: "", shortDescription: "", description: "", price: "", previousPrice: "", image: "", sourceUrl: "", images: "", specifications: "", categoryId: "", stock: "" };
+const emptyCategory = { name: "", slug: "", subtitle: "", description: "", image: "", parentId: "" };
+const emptyProduct = { name: "", slug: "", sku: "", brand: "", shortDescription: "", description: "", price: "", previousPrice: "", image: "", sourceUrl: "", images: "", specifications: "", categoryId: "", stock: "", type: "product" };
 const orderStatuses = ["new", "processing", "completed", "cancelled"];
 const orderStatusLabels: Record<string, string> = { new: "Новый", processing: "В обработке", completed: "Выполнен", cancelled: "Отменён" };
 const messageStatusLabels: Record<string, string> = { NEW: "Новое", READ: "Прочитано", ANSWERED: "Отвечено" };
@@ -36,7 +37,7 @@ const fieldLabels: Record<string, string> = {
   SMS_PROVIDER: "Провайдер (twilio)", SMS_API_KEY: "Account SID", SMS_API_SECRET: "Auth Token", SMS_SENDER: "Номер отправителя",
   TELEGRAM_BOT_TOKEN: "Токен бота", TELEGRAM_CHAT_ID: "ID чата",
 };
-const tabs: Array<[Tab, string]> = [["overview", "Обзор"], ["orders", "Заказы"], ["catalog", "Каталог"], ["users", "Пользователи"], ["messages", "Сообщения"], ["settings", "Настройки"], ["profile", "Мой профиль"]];
+const tabs: Array<[Tab, string]> = [["overview", "Обзор"], ["orders", "Заказы"], ["dealers", "Дилеры и склад"], ["catalog", "Каталог"], ["users", "Пользователи"], ["messages", "Сообщения"], ["settings", "Настройки"], ["profile", "Мой профиль"]];
 
 function parseSpecifications(value: string) {
   const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -169,7 +170,7 @@ export function AdminDashboard() {
           specifications: parseSpecifications(productForm.specifications),
           price: Number(productForm.price),
           previousPrice: productForm.previousPrice ? Number(productForm.previousPrice) : null,
-          stock: Number(productForm.stock),
+          stock: productForm.type === "service" ? 0 : Number(productForm.stock),
         }),
       }));
       setProductForm({ ...emptyProduct, categoryId: categories[0]?.id || "" });
@@ -195,7 +196,7 @@ export function AdminDashboard() {
         images,
         specifications: parseSpecifications(String(values.specifications || "")),
         price: Number(values.price),
-        stock: Number(values.stock),
+        stock: values.type === "service" ? 0 : Number(values.stock),
         previousPrice: values.previousPrice ? Number(values.previousPrice) : null,
         isPublished: Number(values.isPublished),
         featured: Number(values.featured),
@@ -381,6 +382,45 @@ export function AdminDashboard() {
     });
   }
 
+  // ---------- категории: два уровня ----------
+  const mainCategories = categories.filter((category) => !category.parentId);
+  const categoryOptions = (
+    <>
+      {mainCategories.map((main) => {
+        const subs = categories.filter((category) => category.parentId === main.id);
+        return subs.length ? (
+          <optgroup key={main.id} label={main.name}>
+            <option value={main.id}>{main.name} (без подкатегории)</option>
+            {subs.map((sub) => <option key={sub.id} value={sub.id}>{main.name} → {sub.name}</option>)}
+          </optgroup>
+        ) : <option key={main.id} value={main.id}>{main.name}</option>;
+      })}
+    </>
+  );
+
+  function renderCategory(category: Category, isSub: boolean) {
+    const subCount = categories.filter((item) => item.parentId === category.id).length;
+    return (
+      <details className="rounded-xl bg-slate-50 p-4 dark:bg-slate-800">
+        <summary className="cursor-pointer font-semibold">
+          {isSub ? "↳ " : ""}{category.name} <span className="text-xs text-slate-500">/{category.slug}{!isSub && subCount ? ` · подкатегорий: ${subCount}` : ""}{category.status === "draft" ? " · черновик" : ""}</span>
+        </summary>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <form onSubmit={(event) => void editCategory(event, category.id)} className="grid flex-1 gap-2 sm:grid-cols-2">
+            {(["name", "slug", "subtitle", "description", "image"] as const).map((field) => <input key={field} name={field} defaultValue={category[field]} required={field === "name" || field === "slug"} placeholder={field} className={inputClass} />)}
+            <select name="status" defaultValue={category.status} className={inputClass}><option value="published">Опубликована</option><option value="draft">Черновик</option></select>
+            <select name="parentId" defaultValue={category.parentId || ""} disabled={!isSub && subCount > 0} title={!isSub && subCount > 0 ? "У категории есть подкатегории — её нельзя вложить в другую" : undefined} className={inputClass}>
+              <option value="">Главная категория</option>
+              {mainCategories.filter((main) => main.id !== category.id).map((main) => <option key={main.id} value={main.id}>Подкатегория в «{main.name}»</option>)}
+            </select>
+            <button disabled={busy === `category-${category.id}`} className={primaryButton}>{busy === `category-${category.id}` ? "Сохранение…" : "Сохранить"}</button>
+          </form>
+          <button type="button" onClick={() => void remove(`/api/admin/categories/${category.id}`, isSub ? "Удалить подкатегорию?" : "Удалить категорию?", "Категория удалена.")} className={`${dangerButton} h-fit`}>Удалить</button>
+        </div>
+      </details>
+    );
+  }
+
   if (!overview && loading) return <p className="rounded-2xl bg-white p-6 dark:bg-slate-900">Загружаем данные из базы…</p>;
 
   const newMessages = messages.filter((message) => message.status === "NEW").length;
@@ -468,6 +508,8 @@ export function AdminDashboard() {
             </section>
           ) : null}
 
+          {tab === "dealers" ? <HasiAdminPanel /> : null}
+
           {tab === "catalog" ? (
             <div className="space-y-6">
               <div className="grid gap-6 xl:grid-cols-2">
@@ -475,6 +517,12 @@ export function AdminDashboard() {
                   <h2 className="text-xl font-bold">Добавить категорию</h2>
                   <input required maxLength={120} placeholder="Название" value={categoryForm.name} onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })} className={inputClass} />
                   <input required pattern="[a-z0-9-]+" placeholder="slug (латиница)" value={categoryForm.slug} onChange={(e) => setCategoryForm({ ...categoryForm, slug: e.target.value })} className={inputClass} />
+                  <label className="block text-xs text-slate-500">Родительская категория
+                    <select value={categoryForm.parentId} onChange={(e) => setCategoryForm({ ...categoryForm, parentId: e.target.value })} className={`${inputClass} mt-1`}>
+                      <option value="">— Главная категория (верхний уровень) —</option>
+                      {mainCategories.map((category) => <option key={category.id} value={category.id}>Подкатегория в «{category.name}»</option>)}
+                    </select>
+                  </label>
                   <input placeholder="Подзаголовок" value={categoryForm.subtitle} onChange={(e) => setCategoryForm({ ...categoryForm, subtitle: e.target.value })} className={inputClass} />
                   <textarea placeholder="Описание" value={categoryForm.description} onChange={(e) => setCategoryForm({ ...categoryForm, description: e.target.value })} className={inputClass} rows={3} />
                   <input placeholder="URL изображения (необязательно)" value={categoryForm.image} onChange={(e) => setCategoryForm({ ...categoryForm, image: e.target.value })} className={inputClass} />
@@ -482,7 +530,7 @@ export function AdminDashboard() {
                 </form>
 
                 <form data-kind="create" onSubmit={createProduct} className={`space-y-4 ${card}`}>
-                  <h2 className="text-xl font-bold">Добавить товар</h2>
+                  <h2 className="text-xl font-bold">Добавить товар или услугу</h2>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <input required placeholder="Название" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} className={inputClass} />
                     <input required pattern="[a-z0-9-]+" placeholder="slug" value={productForm.slug} onChange={(e) => setProductForm({ ...productForm, slug: e.target.value })} className={inputClass} />
@@ -490,8 +538,14 @@ export function AdminDashboard() {
                     <input placeholder="Бренд" value={productForm.brand} onChange={(e) => setProductForm({ ...productForm, brand: e.target.value })} className={inputClass} />
                     <label className="text-xs text-slate-500">Цена (сомонӣ)<input required type="number" min="0" step="1" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} className={`${inputClass} mt-1`} /></label>
                     <label className="text-xs text-slate-500">Цена до скидки (сомонӣ)<input type="number" min="0" step="1" value={productForm.previousPrice} onChange={(e) => setProductForm({ ...productForm, previousPrice: e.target.value })} className={`${inputClass} mt-1`} /></label>
-                    <label className="text-xs text-slate-500">Остаток<input required type="number" min="0" step="1" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} className={`${inputClass} mt-1`} /></label>
-                    <select required value={productForm.categoryId} onChange={(e) => setProductForm({ ...productForm, categoryId: e.target.value })} className={inputClass}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
+                    <label className="text-xs text-slate-500">Тип позиции
+                      <select value={productForm.type} onChange={(e) => setProductForm({ ...productForm, type: e.target.value })} className={`${inputClass} mt-1`}>
+                        <option value="product">Товар / техника</option>
+                        <option value="service">Услуга (монтаж, настройка, прокладка кабеля…)</option>
+                      </select>
+                    </label>
+                    {productForm.type === "service" ? <p className="self-end rounded-xl bg-sky-50 p-3 text-xs text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">У услуги нет остатка на складе — она всегда доступна для заказа.</p> : <label className="text-xs text-slate-500">Остаток<input required type="number" min="0" step="1" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} className={`${inputClass} mt-1`} /></label>}
+                    <select required value={productForm.categoryId} onChange={(e) => setProductForm({ ...productForm, categoryId: e.target.value })} className={`${inputClass} sm:col-span-2`}>{categoryOptions}</select>
                   </div>
                   <input placeholder="URL или путь главного изображения" value={productForm.image} onChange={(e) => setProductForm({ ...productForm, image: e.target.value })} className={inputClass} />
                   <label className="text-xs text-slate-500">Загрузить фотографии (JPEG, PNG, WebP; до 6 файлов по 10 МБ)<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void uploadImages(event.currentTarget)} className={`${inputClass} mt-1`} /></label>
@@ -499,25 +553,19 @@ export function AdminDashboard() {
                   <textarea placeholder="Характеристики, по одной на строку: Разрешение: 4 Мп" value={productForm.specifications} onChange={(e) => setProductForm({ ...productForm, specifications: e.target.value })} className={inputClass} rows={3} />
                   <input placeholder="Краткое описание" value={productForm.shortDescription} onChange={(e) => setProductForm({ ...productForm, shortDescription: e.target.value })} className={inputClass} />
                   <textarea placeholder="Полное описание" value={productForm.description} onChange={(e) => setProductForm({ ...productForm, description: e.target.value })} className={inputClass} rows={3} />
-                  <button disabled={busy === "product-create"} className={primaryButton}>{busy === "product-create" ? "Создание…" : "Создать товар"}</button>
+                  <button disabled={busy === "product-create"} className={primaryButton}>{busy === "product-create" ? "Создание…" : productForm.type === "service" ? "Создать услугу" : "Создать товар"}</button>
                 </form>
               </div>
 
               <section className={card}>
-                <h2 className="text-xl font-bold">Категории каталога</h2>
+                <h2 className="text-xl font-bold">Управление категориями</h2>
+                <p className="mt-1 text-sm text-slate-500">Два уровня: главная категория → подкатегории. Создавайте главные категории и привязывайте к ним подкатегории в форме выше.</p>
                 <div className="mt-4 space-y-3">
-                  {categories.map((category) => (
-                    <details key={category.id} className="rounded-xl bg-slate-50 p-4 dark:bg-slate-800">
-                      <summary className="cursor-pointer font-semibold">{category.name} <span className="text-xs text-slate-500">/{category.slug}</span></summary>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <form onSubmit={(event) => void editCategory(event, category.id)} className="grid flex-1 gap-2 sm:grid-cols-2">
-                          {(["name", "slug", "subtitle", "description", "image"] as const).map((field) => <input key={field} name={field} defaultValue={category[field]} required={field === "name" || field === "slug"} placeholder={field} className={inputClass} />)}
-                          <select name="status" defaultValue={category.status} className={inputClass}><option value="published">Опубликована</option><option value="draft">Черновик</option></select>
-                          <button disabled={busy === `category-${category.id}`} className={primaryButton}>{busy === `category-${category.id}` ? "Сохранение…" : "Сохранить"}</button>
-                        </form>
-                        <button type="button" onClick={() => void remove(`/api/admin/categories/${category.id}`, "Удалить категорию?", "Категория удалена.")} className={`${dangerButton} h-fit`}>Удалить</button>
-                      </div>
-                    </details>
+                  {mainCategories.map((main) => (
+                    <div key={main.id} className="space-y-2">
+                      {renderCategory(main, false)}
+                      {categories.filter((c) => c.parentId === main.id).map((sub) => <div key={sub.id} className="ml-6 border-l-2 border-violet-200 pl-4 dark:border-violet-500/30">{renderCategory(sub, true)}</div>)}
+                    </div>
                   ))}
                 </div>
               </section>
@@ -528,7 +576,7 @@ export function AdminDashboard() {
                 <div className="mt-4 space-y-3">
                   {products.map((product) => (
                     <details key={product.id} className="rounded-xl bg-slate-50 p-4 dark:bg-slate-800">
-                      <summary className="cursor-pointer font-semibold">{product.name} · {formatTjs(product.price)} · Остаток: {product.stock}{product.isPublished ? "" : " · скрыт"}</summary>
+                      <summary className="cursor-pointer font-semibold">{product.type === "service" ? "🛠 " : ""}{product.name} · {formatTjs(product.price)} · {product.type === "service" ? "Услуга" : `Остаток: ${product.stock}`}{product.isPublished ? "" : " · скрыт"}</summary>
                       <form onSubmit={(event) => void editProduct(event, product.id)} className="mt-4 grid gap-2 sm:grid-cols-2">
                         {(["name", "slug", "sku", "brand", "shortDescription", "description", "image", "sourceUrl"] as const).map((field) => <input key={field} name={field} defaultValue={product[field]} required={field === "name" || field === "slug"} placeholder={field === "sourceUrl" ? "Источник HTTPS" : field} className={inputClass} />)}
                         <label className="text-xs text-slate-500 sm:col-span-2">Фотографии галереи, по одной на строку<textarea name="images" defaultValue={product.images.join("\n")} className={inputClass} rows={3} /></label>
@@ -536,8 +584,9 @@ export function AdminDashboard() {
                         <label className="text-xs text-slate-500 sm:col-span-2">Загрузить фотографии<input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => void uploadImages(event.currentTarget)} className={`${inputClass} mt-1`} /></label>
                         <input name="price" type="number" min="0" step="1" defaultValue={product.price} required placeholder="Цена (сомонӣ)" className={inputClass} />
                         <input name="previousPrice" type="number" min="0" step="1" defaultValue={product.previousPrice ?? ""} placeholder="Старая цена" className={inputClass} />
-                        <input name="stock" type="number" min="0" step="1" defaultValue={product.stock} required placeholder="Остаток" className={inputClass} />
-                        <select name="categoryId" defaultValue={product.categoryId} className={inputClass}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
+                        <select name="type" defaultValue={product.type || "product"} className={inputClass}><option value="product">Товар / техника</option><option value="service">Услуга</option></select>
+                        <input name="stock" type="number" min="0" step="1" defaultValue={product.type === "service" ? 0 : product.stock} placeholder="Остаток (для услуги не нужен)" className={inputClass} />
+                        <select name="categoryId" defaultValue={product.categoryId} className={`${inputClass} sm:col-span-2`}>{categoryOptions}</select>
                         <select name="isPublished" defaultValue={product.isPublished} className={inputClass}><option value="1">Опубликован</option><option value="0">Скрыт</option></select>
                         <select name="featured" defaultValue={product.featured} className={inputClass}><option value="0">Обычный товар</option><option value="1">Популярный товар</option></select>
                         <button disabled={busy === `product-${product.id}`} className={primaryButton}>{busy === `product-${product.id}` ? "Сохранение…" : "Сохранить"}</button>

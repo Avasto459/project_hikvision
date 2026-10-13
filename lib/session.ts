@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { isAppRole, type AppRole } from "@/lib/roles";
 import { getJwtSecret, isPrimaryAdminEmail } from "@/lib/jwt-secret";
 
 export { isPrimaryAdminEmail };
@@ -10,7 +11,7 @@ export type SessionPayload = {
   id: string;
   email: string;
   name?: string;
-  role: "USER" | "ADMIN";
+  role: AppRole;
 };
 
 /**
@@ -30,11 +31,11 @@ export function verifySessionToken(token: string): SessionPayload | null {
     const payload = jwt.verify(token, getJwtSecret());
     if (typeof payload === "string" || typeof payload.id !== "string" ||
         typeof payload.email !== "string" ||
-        (payload.role !== "USER" && payload.role !== "ADMIN")) {
+        !isAppRole(payload.role)) {
       return null;
     }
     // Главный админ — всегда ADMIN, без чтения БД.
-    const role = isPrimaryAdminEmail(payload.email) ? "ADMIN" : payload.role;
+    const role: AppRole = isPrimaryAdminEmail(payload.email) ? "ADMIN" : payload.role;
     const name = typeof payload.name === "string" ? payload.name : "";
     return { id: payload.id, email: payload.email, name, role };
   } catch {
@@ -64,7 +65,7 @@ export function decodeSessionPayloadUnsafe(token: string): SessionPayload | null
       : binary;
     const payload = JSON.parse(json) as { id?: unknown; email?: unknown; name?: unknown; role?: unknown; exp?: unknown };
     if (typeof payload.id !== "string" || typeof payload.email !== "string") return null;
-    if (payload.role !== "USER" && payload.role !== "ADMIN") return null;
+    if (!isAppRole(payload.role)) return null;
     if (typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) return null;
     const role = isPrimaryAdminEmail(payload.email) ? "ADMIN" : payload.role;
     const name = typeof payload.name === "string" ? payload.name : "";

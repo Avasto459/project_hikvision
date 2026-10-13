@@ -13,7 +13,7 @@ const equipmentTypes = [
 ];
 
 export default async function HomePage() {
-  const categories = await getCategories();
+  const categories = (await getCategories()).filter((category) => !category.parentId); // на главной — только главные категории
   const popularProducts = await getProducts({ featured: true, limit: 4 });
   const newProducts = await getProducts({ limit: 4 });
 

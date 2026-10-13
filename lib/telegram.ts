@@ -45,7 +45,7 @@ export function formatNewOrderNotice(order: NewOrderNotice, options: { markdown?
     `👤 Покупатель: ${esc(`${order.firstName} ${order.lastName}`.trim())}`,
     `📞 Телефон: ${esc(order.phone)}`,
     `📧 Email: ${esc(order.email || "—")}`,
-    `🏙️ Адрес: ${esc(`${order.city}, ${order.address}`)}`,
+    `🏙️ Адрес: ${esc([order.city, order.address].filter(Boolean).join(", "))}`,
     ...(order.comment ? [`💬 Комментарий: ${esc(order.comment)}`] : []),
     "",
     "📦 Товары:",

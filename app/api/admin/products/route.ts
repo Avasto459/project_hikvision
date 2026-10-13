@@ -34,13 +34,19 @@ export async function POST(request: Request) {
       categoryId?: string;
       stock?: number;
       featured?: number;
+      type?: string;
     };
 
     if (!body.name?.trim() || !/^[a-z0-9-]+$/.test(body.slug || "") || !body.categoryId) {
       throw new StoreError("Название, slug и категория обязательны. Slug использует латинские буквы, цифры и дефисы.", 400);
     }
+    if (body.type !== undefined && body.type !== "product" && body.type !== "service") {
+      throw new StoreError("Тип позиции: product (товар) или service (услуга).", 400);
+    }
+    const isService = body.type === "service";
+    // у услуги нет остатка — поле остатка не требуется
     if (!Number.isSafeInteger(body.price) || (body.price as number) < 0 ||
-        !Number.isInteger(body.stock) || (body.stock as number) < 0) {
+        (!isService && (!Number.isInteger(body.stock) || (body.stock as number) < 0))) {
       throw new StoreError("Цена в сомони и остаток должны быть целыми неотрицательными числами.", 400);
     }
     if (body.previousPrice != null && (!Number.isSafeInteger(body.previousPrice) || body.previousPrice < 0)) {
@@ -72,8 +78,9 @@ export async function POST(request: Request) {
       image: images[0] || "",
       sourceUrl: body.sourceUrl?.trim() || "",
       categoryId: body.categoryId,
-      stock: body.stock!,
+      stock: isService ? 0 : body.stock!,
       featured: body.featured ?? 0,
+      type: isService ? "service" : "product",
     });
 
     return NextResponse.json({ product }, { status: 201 });
